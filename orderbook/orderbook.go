@@ -8,6 +8,12 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type Repo interface {
+	UpdateSnapshot(s Snapshot)
+	UpdateQuote(s QuoteStream)
+	UpdateLocalOrder(orders []LocalOrderUpdate) error
+}
+
 type AggregatedOrderBook struct {
 	Exchange   string
 	Symbol     string
