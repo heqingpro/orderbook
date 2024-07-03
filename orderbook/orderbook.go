@@ -10,8 +10,9 @@ import (
 
 type Repo interface {
 	UpdateSnapshot(s Snapshot)
-	UpdateQuote(s QuoteStream)
-	UpdateLocalOrder(orders []LocalOrderUpdate) error
+	UpdateQuote(s QuoteStream) *QuoteStream
+	UpdateLocalOrder(orders []LocalOrderUpdate) (*QuoteStream, error)
+	GetAggregatedSnapshot() *Snapshot
 }
 
 type AggregatedOrderBook struct {
@@ -41,7 +42,7 @@ func newOrderBook() *orderBook {
 
 func NewFromLocalOrderBook(Symbol string, orders []LocalOrderUpdate) (*AggregatedOrderBook, error) {
 	local := newOrderBook()
-	err := local.updateLocalOrder(orders)
+	_, err := local.updateLocalOrder(orders)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +51,30 @@ func NewFromLocalOrderBook(Symbol string, orders []LocalOrderUpdate) (*Aggregate
 		Local:     local,
 		Timestamp: time.Now(),
 	}, nil
+}
+
+func (a *AggregatedOrderBook) GetAggregatedSnapshot() *Snapshot {
+	bids := make([][2]decimal.Decimal, 0)
+	asks := make([][2]decimal.Decimal, 0)
+	bit := a.Aggregated.Bids.Iterator()
+	for bit.Next() {
+		price := bit.Key().(decimal.Decimal)
+		quantity := a.Aggregated.BidsMap[price]
+		bids = append(bids, [2]decimal.Decimal{price, quantity})
+	}
+	ait := a.Aggregated.Asks.Iterator()
+	for ait.Next() {
+		price := ait.Key().(decimal.Decimal)
+		quantity := a.Aggregated.AsksMap[price]
+		asks = append(asks, [2]decimal.Decimal{price, quantity})
+	}
+	return &Snapshot{
+		Exchange:  a.Exchange,
+		Symbol:    a.Symbol,
+		Timestamp: a.Timestamp,
+		Bids:      bids,
+		Asks:      asks,
+	}
 }
 
 func (a *AggregatedOrderBook) UpdateSnapshot(s Snapshot) {
@@ -82,10 +107,13 @@ func (a *AggregatedOrderBook) aggregateOrderBook() {
 	}
 }
 
-func (a *AggregatedOrderBook) UpdateQuote(s QuoteStream) {
+func (a *AggregatedOrderBook) UpdateQuote(s QuoteStream) *QuoteStream {
+	bids := make([][2]decimal.Decimal, 0)
+	asks := make([][2]decimal.Decimal, 0)
 	a.Timestamp = s.Timestamp
 	for _, ask := range s.Asks {
 		price, quantity := ask[0], ask[1]
+		quote := [2]decimal.Decimal{price, quantity}
 		_, ok := a.Aggregated.AsksMap[price]
 		if !ok {
 			a.Aggregated.Asks.Put(price, nil)
@@ -98,10 +126,13 @@ func (a *AggregatedOrderBook) UpdateQuote(s QuoteStream) {
 			} else {
 				a.Aggregated.AsksMap[price] = quantityNew
 			}
+			quote = [2]decimal.Decimal{price, quantityNew}
 		}
+		asks = append(asks, quote)
 	}
 	for _, b := range s.Bids {
 		price, quantity := b[0], b[1]
+		quote := [2]decimal.Decimal{price, quantity}
 		_, ok := a.Aggregated.BidsMap[price]
 		if !ok {
 			a.Aggregated.Bids.Put(price, nil)
@@ -114,18 +145,30 @@ func (a *AggregatedOrderBook) UpdateQuote(s QuoteStream) {
 			} else {
 				a.Aggregated.BidsMap[price] = quantityNew
 			}
+			quote = [2]decimal.Decimal{price, quantityNew}
 		}
+		bids = append(bids, quote)
+	}
+
+	return &QuoteStream{
+		Exchange:  a.Exchange,
+		Symbol:    a.Symbol,
+		Timestamp: a.Timestamp,
+		Bids:      bids,
+		Asks:      asks,
 	}
 }
 
-func (a *AggregatedOrderBook) UpdateLocalOrder(orders []LocalOrderUpdate) error {
-	if err := a.Local.updateLocalOrder(orders); err != nil {
-		return err
+func (a *AggregatedOrderBook) UpdateLocalOrder(orders []LocalOrderUpdate) (*QuoteStream, error) {
+	_, err := a.Local.updateLocalOrder(orders)
+	if err != nil {
+		return nil, err
 	}
-	if err := a.Aggregated.updateLocalOrder(orders); err != nil {
-		return err
+	quotes, err := a.Aggregated.updateLocalOrder(orders)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return quotes, nil
 }
 
 func (a *AggregatedOrderBook) GetOrderBook() Snapshot {
@@ -160,18 +203,23 @@ func (o *orderBook) updateSnapshot(s Snapshot) {
 	}
 }
 
-func (o *orderBook) updateLocalOrder(orders []LocalOrderUpdate) error {
+func (o *orderBook) updateLocalOrder(orders []LocalOrderUpdate) (*QuoteStream, error) {
+	bids := make([][2]decimal.Decimal, 0)
+	asks := make([][2]decimal.Decimal, 0)
 	var priceMap map[decimal.Decimal]decimal.Decimal
 	var tree *rbt.Tree
 	var quantityNew decimal.Decimal
 	for _, order := range orders {
+		var quotes [][2]decimal.Decimal
 		switch order.Side {
 		case Bid:
 			priceMap = o.BidsMap
 			tree = o.Bids
+			quotes = bids
 		case Ask:
 			priceMap = o.AsksMap
 			tree = o.Asks
+			quotes = asks
 		}
 		quantity, ok := priceMap[order.Price]
 		switch order.Operate {
@@ -185,7 +233,7 @@ func (o *orderBook) updateLocalOrder(orders []LocalOrderUpdate) error {
 			if ok {
 				quantityNew = quantity.Sub(order.Quantity)
 			} else {
-				return errors.New("local orders invalid")
+				return nil, errors.New("local orders invalid")
 			}
 		}
 		if quantityNew.IsZero() {
@@ -196,8 +244,14 @@ func (o *orderBook) updateLocalOrder(orders []LocalOrderUpdate) error {
 			priceMap[order.Price] = quantityNew
 		}
 		o.Timestamp = order.Timestamp
+		quote := [2]decimal.Decimal{order.Price, quantityNew}
+		quotes = append(quotes, quote)
 	}
-	return nil
+	return &QuoteStream{
+		Timestamp: o.Timestamp,
+		Bids:      bids,
+		Asks:      asks,
+	}, nil
 }
 
 func AskComparator(a, b interface{}) int {
