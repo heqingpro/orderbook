@@ -79,10 +79,10 @@ func (a *AggregatedOrderBook) GetAggregatedSnapshot() *Snapshot {
 
 func (a *AggregatedOrderBook) UpdateSnapshot(s Snapshot) {
 	a.Exchange = s.Exchange
-	a.Timestamp = s.Timestamp
-	aggregated := newOrderBook()
-	aggregated.updateSnapshot(s)
-	a.Aggregated = aggregated
+	a.Aggregated = newOrderBook()
+	a.Timestamp = time.Now()
+	a.Aggregated.Timestamp = s.Timestamp
+	a.Aggregated.updateSnapshot(s)
 	// Aggregate local data
 	a.aggregateOrderBook()
 }
@@ -111,7 +111,12 @@ func (a *AggregatedOrderBook) aggregateOrderBook() {
 func (a *AggregatedOrderBook) UpdateQuote(s QuoteStream) *QuoteStream {
 	bids := make([][2]decimal.Decimal, 0)
 	asks := make([][2]decimal.Decimal, 0)
-	a.Timestamp = s.Timestamp
+	// check update timestamp
+	if a.Aggregated.Timestamp.After(s.Timestamp) {
+		return nil
+	}
+	a.Timestamp = time.Now()
+	a.Aggregated.Timestamp = s.Timestamp
 	for _, ask := range s.Asks {
 		price, quantity := ask[0], ask[1]
 		quote := [2]decimal.Decimal{price, quantity}
@@ -161,6 +166,7 @@ func (a *AggregatedOrderBook) UpdateQuote(s QuoteStream) *QuoteStream {
 }
 
 func (a *AggregatedOrderBook) UpdateLocalOrder(orders []LocalOrderUpdate) (*QuoteStream, error) {
+	a.Timestamp = time.Now()
 	_, err := a.Local.updateLocalOrder(orders)
 	if err != nil {
 		return nil, err
@@ -168,6 +174,9 @@ func (a *AggregatedOrderBook) UpdateLocalOrder(orders []LocalOrderUpdate) (*Quot
 	quotes, err := a.Aggregated.updateLocalOrder(orders)
 	if err != nil {
 		return nil, err
+	}
+	if len(quotes.Asks) == 0 && len(quotes.Bids) == 0 {
+		return nil, nil
 	}
 	return quotes, nil
 }
@@ -211,6 +220,10 @@ func (o *orderBook) updateLocalOrder(orders []LocalOrderUpdate) (*QuoteStream, e
 	var tree *rbt.Tree
 	var quantityNew decimal.Decimal
 	for _, order := range orders {
+		if o.Timestamp.After(order.Timestamp) {
+			continue
+		}
+		o.Timestamp = order.Timestamp
 		var quotes [][2]decimal.Decimal
 		switch order.Side {
 		case Bid:
