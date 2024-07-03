@@ -1,7 +1,6 @@
 package exchange
 
 import (
-	"github.com/samber/lo"
 	"orderbook/db"
 	"orderbook/orderbook"
 	"orderbook/redis"
@@ -22,22 +21,7 @@ func NewBinance() (*Binance, error) {
 }
 
 func (b *Binance) initOrderBook(symbol string) error {
-	orders, err := b.db.GetAvailableOrders(symbol)
-	if err != nil {
-		return err
-	}
-	orderbook, err := orderbook.NewFromLocalOrderBook(symbol, lo.Map(orders, func(order db.Order, _ int) orderbook.LocalOrderUpdate {
-		side := orderbook.Bid
-		if order.Side == db.Sell {
-			side = orderbook.Ask
-		}
-		return orderbook.LocalOrderUpdate{
-			Side:     side,
-			Price:    order.Price,
-			Quantity: order.Quantity,
-			Operate:  orderbook.Add,
-		}
-	}))
+	orderbook, err := orderbook.NewFromLocalOrderBook(symbol, []orderbook.LocalOrderUpdate{})
 	if err != nil {
 		return err
 	}

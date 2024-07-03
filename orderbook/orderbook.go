@@ -82,6 +82,7 @@ func (a *AggregatedOrderBook) UpdateSnapshot(s Snapshot) {
 	a.Timestamp = s.Timestamp
 	aggregated := newOrderBook()
 	aggregated.updateSnapshot(s)
+	a.Aggregated = aggregated
 	// Aggregate local data
 	a.aggregateOrderBook()
 }
